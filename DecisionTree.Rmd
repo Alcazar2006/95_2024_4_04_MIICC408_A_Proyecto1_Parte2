@@ -1,0 +1,366 @@
+---
+title: "Proyecto 1 Parte 2"
+---
+
+Instalacion de paquetes
+```{r}
+#Sys.setenv(PATH = paste("C:/rtools40/usr/bin;C:/rtools40/ucrt64/bin", Sys.getenv("PATH"), sep = ";"))
+#Sys.which("make")
+#install.packages("C:\\Users\\dalca\\Downloads\\db_csv_\\fim4r_1.8\\fim4r", 
+#repos = NULL, 
+#type = "source")
+#install.packages('arules')
+#install.packages('dplyr')
+#install.packages("ggplot2")
+#install.packages("ggalt")
+#install.packages("randomForest")
+```
+
+Imports
+```{r}
+library(ggalt)
+library(ggplot2)
+library(arules)
+library(dplyr)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+Limpieza de los datos
+```{r}
+data_importacion = read.csv('C:\\Users\\dalca\\Documents\\Usac - Maestria\\2024\\Cursos\\Cuarto Trimeste\\Mineria de datos\\Proyecto 1\\95_2024_4_04_MIICC408_A_Proyecto1\\Datos\\Importaciones.csv', sep=',', fileEncoding = "latin1")
+
+catalogo_continente = read.csv('C:\\Users\\dalca\\Documents\\Usac - Maestria\\2024\\Cursos\\Cuarto Trimeste\\Mineria de datos\\Proyecto 1\\95_2024_4_04_MIICC408_A_Proyecto1\\Datos\\Catalogo Pais-Continente.csv', sep=',' ,fileEncoding = "UTF-8")
+catalogo_continente
+
+#Renombrar las columnas
+names(catalogo_continente) <- c("Codigo", "COD_CONTINENTE","NOMBRE_PAIS","CONTINENTE")
+#Eliminar la columna 'Extra' 
+catalogo_continente <- catalogo_continente[, c("Codigo", "COD_CONTINENTE","NOMBRE_PAIS", "CONTINENTE" )]
+
+
+data_importacion
+catalogo_continente
+
+#Unificar la columna de ANYI y MES en una nueva columna
+data_importacion <- data_importacion %>%
+  mutate(ANYO_MES = paste(ANYO, MES, sep = "-"))
+
+#Eliminar  la columna de ANYO y MES, reorganizar las columnas del set de datos
+data_importacion <- data_importacion[, c("ANYO_MES", setdiff(names(data_importacion), c("ANYO_MES","ANYO", "MES")))]
+
+data_importacion = merge(data_importacion, catalogo_continente, by.x = "PAIS", by.y = "Codigo", all.x = TRUE)
+
+sapply(data_importacion, function(x) sum(is.na(x)))
+
+data_importacion
+
+#Corregir los paises sin Catalogo de continentes
+data_importacion
+
+data_importacion <- data_importacion %>%
+  mutate(
+    NOMBRE_PAIS = case_when(
+      PAIS == 2603 ~ "2603",
+      PAIS == 4229 ~ "4229",
+      TRUE ~ NOMBRE_PAIS
+    ),
+    COD_CONTINENTE = case_when(
+      PAIS == 2603 ~ 1,
+      PAIS == 4229 ~ 2,
+      TRUE ~ COD_CONTINENTE
+    ),
+    CONTINENTE = case_when(
+      PAIS == 2603 ~ "América",
+      PAIS == 4229 ~ "Europa",
+      TRUE ~ CONTINENTE
+    )
+  )
+
+data_importacion[is.na(data_importacion$CONTINENTE), ]
+sapply(data_importacion, function(x) sum(is.na(x)))
+
+summary(data_importacion)
+
+#Cambio del campo Valor de char a numeric
+data_importacion$VALOR <- as.numeric(gsub(",", "", data_importacion$VALOR))
+summary(data_importacion)
+
+```
+```{r}
+data_importacion$SAC <- as.character(data_importacion$SAC)
+data_importacion$CAPITULO <- substr(as.character(data_importacion$SAC), 1, 2)
+data_importacion
+```
+árboles de decisión
+```{r}
+#Situacion 1
+# En base a la Regla:  {PESO=[3.6e+03,1.32e+08]}	{CONTINENTE=América}	0.308145	0.924435	0.3333333	0.9785845	23929 - cuando el peso de las importaciones está entre 3,600 kg y 132 millones de kg, estas provienen de América en el 92.44% de los casos
+data_importacion_arbol = data_importacion
+
+data_importacion_arbol$PESO_MEDIO_AMERICA <- ifelse(data_importacion_arbol$PESO >= 3600 & data_importacion_arbol$PESO <= 132000000 & data_importacion_arbol$CONTINENTE == "América", 1, 0)
+
+arbol_peso_medio <- rpart(PESO_MEDIO_AMERICA ~ 
+                            CAPITULO + 
+                            ADUANA + 
+                            VIA + 
+                            PESO + 
+                            VALOR,
+                          data = data_importacion_arbol, method = "class")
+rpart.plot(arbol_peso_medio, type = 2, extra = 0, under = TRUE, fallen.leaves = TRUE,
+           box.palette = "BuGn", main = "Prediccion de Peso Medio-Alto en América")
+
+
+# Pruebas
+prueba1 <- data.frame(CAPITULO = '11', ADUANA = 15, VIA = 2, PESO = 5000, VALOR = 30000)
+prueba2 <- data.frame(CAPITULO = '13', ADUANA = 34, VIA = 1, PESO = 10000, VALOR = 50000)
+prueba3 <- data.frame(CAPITULO = '90', ADUANA = 29, VIA = 3, PESO = 30000, VALOR = 70000)
+
+# Predicciones
+resultado1 <- predict(arbol_peso_medio, prueba1, type = "class") # Correcto
+resultado2 <- predict(arbol_peso_medio, prueba2, type = "class") # Correcto
+resultado3 <- predict(arbol_peso_medio, prueba3, type = "class") # Incorrecto
+
+print(list(resultado1, resultado2, resultado3))
+
+```
+
+```{r}
+#Situacion 2
+# En base a la Regla:  {PAIS=[1003,2102)}	{VIA=[1,3]}	0.2106497	1	0.2106497	1	16358 - cuando los productos provienen de los países 1003 y 2102 (Canadá y Honduras) y pasan por las vías 1 y 3, cuando se importan
+
+data_importacion_arbol = data_importacion
+
+
+data_importacion_arbol$VIAS_1_3 <- ifelse( (data_importacion_arbol$VIA %in% c(1, 3)), 1, 0)
+
+arbol_vias <- rpart(VIAS_1_3 ~ 
+                      CAPITULO + 
+                      ADUANA + 
+                      PESO +
+                      PAIS + 
+                      VALOR,
+                    data = data_importacion_arbol, method = "class")
+
+rpart.plot(arbol_vias, type = 2, extra = 0, under = TRUE, fallen.leaves = TRUE,
+
+           box.palette = "BuGn", main = "Prediccion Vías 1 y 3 por pais",  cex = 0.5)
+
+
+# Pruebas
+prueba1 <- data.frame(CAPITULO = '10', ADUANA = 1, PESO = 3000, VALOR = 40000, PAIS = 1003)
+prueba2 <- data.frame(CAPITULO = '11', ADUANA = 8, PESO = 8000, VALOR = 50000, PAIS = 2102)
+prueba3 <- data.frame(CAPITULO = '90', ADUANA = 6, PESO = 2000, VALOR = 30000, PAIS = 1004)
+
+# Predicciones
+resultado1 <- predict(arbol_vias, prueba1, type = "class")
+resultado2 <- predict(arbol_vias, prueba2, type = "class")
+resultado3 <- predict(arbol_vias, prueba3, type = "class")
+
+print(list(resultado1, resultado2, resultado3))
+```
+
+```{r}
+#Situacion 3
+# En base a la Regla: {PESO=[145,3.6e+03)} => {CONTINENTE=América}	0.3214346	0.9632245	1.0196461	24961 - *cuando el peso de las mercancías importadas a Guatemala está en el rango de 145 kg a 3,600 kg, existe una probabilidad del 96.32% de que el origen de estas importaciones sea del continente americano. 
+
+data_importacion_arbol$IS_AMERICA <- ifelse(data_importacion_arbol$CONTINENTE == "América", 1, 0)
+
+arbol_peso_moderado <- rpart(IS_AMERICA ~ 
+                               CAPITULO + 
+                               ADUANA + 
+                               VIA + 
+                               PESO + 
+                               VALOR,
+                             data = data_importacion_arbol, method = "class")
+rpart.plot(arbol_peso_moderado, type = 2, extra = 0, under = TRUE, fallen.leaves = TRUE,
+           box.palette = "BuGn", main = "Predicción de Peso Moderado en América")
+
+# Pruebas
+prueba1 <- data.frame(CAPITULO = '26', ADUANA = 34, VIA = 1, PESO = 3700, VALOR = 50000)   # Correcto
+prueba2 <- data.frame(CAPITULO = '90', ADUANA = 15, VIA = 3, PESO = 4000, VALOR = 80000)  # Correcto
+prueba3 <- data.frame(CAPITULO = '12', ADUANA = 29, VIA = 2, PESO = 4000, VALOR = 60000)  # Correcto
+
+# Predicciones
+resultado1 <- predict(arbol_peso_moderado, prueba1, type = "class")
+resultado2 <- predict(arbol_peso_moderado, prueba2, type = "class")
+resultado3 <- predict(arbol_peso_moderado, prueba3, type = "class")
+
+# Imprimir resultados
+print(list(resultado1, resultado2, resultado3))
+
+```
+
+
+
+
+```{r}
+#Situacion 4
+# En base a la Regla: {PESO=[1.01e+08,3.4e+09]}	{ADUANA=[34,109]}	0.3097032	0.9302236	0.3329341	0.9847121	24050 *Las mercancías de gran peso de entre 101 millones y 3.4 mil millones de kg se procesan predominantemente en las aduanas 34 y 109.
+
+data_importacion_arbol$ADUANA_34_109 <- ifelse(data_importacion_arbol$ADUANA %in% c(34, 109), 1, 0)
+
+arbol_gran_peso <- rpart(ADUANA_34_109 ~ 
+                           CAPITULO +
+                           VIA + 
+                           PESO + 
+                           VALOR + 
+                           PAIS,
+                         data = data_importacion_arbol, method = "class")
+
+rpart.plot(arbol_gran_peso, type = 2, extra = 0, under = TRUE, fallen.leaves = TRUE,
+           box.palette = "BuGn", main = "Predicción de Gran Peso en Aduanas")
+
+# Pruebas 
+prueba1 <- data.frame(CAPITULO = '10', VIA = 1, PESO = 200000, VALOR = 500000, PAIS = 1554)
+prueba2 <- data.frame(CAPITULO = '15', VIA = 1, PESO = 1500000, VALOR = 700000, PAIS = 2106)
+prueba3 <- data.frame(CAPITULO = '90', VIA = 2, PESO = 300000, VALOR = 400000, PAIS = 1554)
+
+# Predicciones
+resultado1 <- predict(arbol_gran_peso, prueba1, type = "class")
+resultado2 <- predict(arbol_gran_peso, prueba2, type = "class")
+resultado3 <- predict(arbol_gran_peso, prueba3, type = "class")
+
+print(list(resultado1, resultado2, resultado3))
+```
+RANDOM FOREST
+
+```{r}
+#Situacion 1
+# En base a la Regla:  {PESO=[3.6e+03,1.32e+08]}	{CONTINENTE=América}	0.308145	0.924435	0.3333333	0.9785845	23929 - cuando el peso de las importaciones está entre 3,600 kg y 132 millones de kg, estas provienen de América en el 92.44% de los casos
+
+
+data_importacion_RF = na.omit(data_importacion)
+data_importacion_RF = data_importacion_RF[, c( "CAPITULO", "ADUANA","VIA","PESO", "VALOR", "PAIS","CONTINENTE", "ANYO_MES")]
+
+data_importacion_RF$PESO_MEDIO_AMERICA <- ifelse(data_importacion_RF$PESO >= 3600 & data_importacion_RF$PESO <= 132000000 & data_importacion_RF$CONTINENTE == "América", 1, 0)
+
+# Desordenar los datos
+set.seed(100)
+data_importacion_RF = data_importacion_RF[sample(1:nrow(data_importacion_RF)),]
+
+#Separar la datos en: 80% para entrenar y 20% para testear.
+index1 <-sample(1:nrow(data_importacion_RF), 0.8*nrow(data_importacion_RF))
+
+train1 <- data_importacion_RF[index1,]
+test1 <- data_importacion_RF[-index1,]
+
+
+# Eliminar niveles vacíos en el conjunto de datos  entrenamiento
+#train$PAIS <- droplevels(train$PAIS)
+
+# Crear el bosque
+
+bosque1 <- randomForest(PESO_MEDIO_AMERICA ~  CAPITULO + ADUANA + VIA + PESO + VALOR + PAIS,
+                       data = train1,
+                       ntree = 1000 , 
+                       mtry = 4
+                       )
+
+prueba1 <- predict(bosque1, test1)
+
+
+#Precision del modelo
+matriz1 <- table(test1$PESO_MEDIO_AMERICA, prueba1)
+
+matriz1
+precision1 = sum(diag(matriz1)) / sum(matriz1)
+
+precision1
+
+#Graficar el bosque
+
+plot(bosque1)
+
+
+# Crear predicción 
+test1 <- data.frame(CAPITULO = 11, ADUANA = 15, VIA = 2, PESO = 5000, PAIS = 1005, VALOR = 30000)
+test2 <- data.frame(CAPITULO = 13, ADUANA = 34, VIA = 1, PESO = 10000, PAIS = 1005, VALOR = 50000)
+test3 <- data.frame(CAPITULO = 90, ADUANA = 29, VIA = 3, PESO = 30000, PAIS = 1010, VALOR = 70000)
+
+# Realizar la predicción
+prediccion1 <- predict(bosque1, test1)
+prediccion1
+
+prediccion2 <- predict(bosque1, test2)
+prediccion2
+
+prediccion3 <- predict(bosque1, test3)
+prediccion3
+
+
+```
+
+```{r}
+#Situacion 2
+
+
+data_importacion_RF = na.omit(data_importacion)
+
+data_importacion_RF = data_importacion_RF[, c( "CAPITULO", "ADUANA","VIA","PESO", "VALOR", "PAIS","CONTINENTE", "ANYO_MES")]
+
+data_importacion_RF$PAIS = as.factor(data_importacion_RF$PAIS)
+
+
+# Desordenar los datos
+set.seed(100)
+data_importacion_RF = data_importacion_RF[sample(1:nrow(data_importacion_RF)),]
+
+#Separar la datos en: 80% para entrenar y 20% para testear.
+index2 <-sample(1:nrow(data_importacion_RF), 0.8*nrow(data_importacion_RF))
+
+train2 <- data_importacion_RF[index2,]
+test2 <- data_importacion_RF[-index2,]
+
+
+# Eliminar niveles vacíos en el conjunto de datos  entrenamiento
+train2$PAIS <- droplevels(train2$PAIS)
+
+# Crear el bosque
+
+bosque2 <- randomForest(PAIS ~  CAPITULO + ADUANA + VIA + PESO + VALOR,
+                       data = train2,
+                       ntree = 1000 , 
+                       mtry = 4
+                       )
+
+prueba2 <- predict(bosque2, test2)
+
+
+#Precision del modelo
+matriz2 <- table(test2$PAIS, prueba2)
+
+matriz2
+
+precision2 = sum(diag(matriz2)) / sum(matriz2)
+
+precision2
+
+#Graficar el bosque
+plot(bosque2)
+
+
+
+# Crear predicción 
+test1 <- data.frame(CAPITULO = 11, ADUANA = 15, VIA = 2, PESO = 5000,  VALOR = 30000)
+test2 <- data.frame(CAPITULO = 13, ADUANA = 34, VIA = 1, PESO = 10000, VALOR = 50000)
+test3 <- data.frame(CAPITULO = 90, ADUANA = 29, VIA = 3, PESO = 30000,  VALOR = 70000)
+
+# Realizar la predicción
+prediccion1 <- predict(bosque2, test1)
+prediccion1
+
+prediccion2 <- predict(bosque2, test2)
+prediccion2
+
+prediccion3 <- predict(bosque2, test3)
+prediccion3
+
+```
+
+Exportar a csv
+```{r}
+write.csv(data_importacion, file = "data_importacion.csv")
+```
+
+
